@@ -3,19 +3,17 @@ module github.com/dashwave/step-manage-ios-code-signing
 go 1.20
 
 require (
-	github.com/bitrise-io/go-steputils v1.0.5
 	github.com/bitrise-io/go-steputils/v2 v2.0.0-alpha.18
 	github.com/bitrise-io/go-utils v1.0.12
 	github.com/bitrise-io/go-utils/v2 v2.0.0-alpha.23
 	github.com/bitrise-io/go-xcode v1.0.18
 	github.com/bitrise-io/go-xcode/v2 v2.0.0-alpha.46
-	github.com/dashwave/go-utils/v2 v2.0.0-20240902112930-19e66b67e6dd
-	github.com/dashwave/go-xcode/v2 v2.0.0-20240902113244-a5b11da31202
 )
 
 require (
 	github.com/bitrise-io/go-pkcs12 v0.0.0-20230815095624-feb898696e02 // indirect
 	github.com/bitrise-io/go-plist v0.0.0-20210301100253-4b1a112ccd10 // indirect
+	github.com/bitrise-io/go-steputils v1.0.5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fullsailor/pkcs7 v0.0.0-20190404230743-d7302db945fa // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
