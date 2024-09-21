@@ -1,10 +1,9 @@
-package main
+package iossigning
 
 import (
+	"errors"
 	"fmt"
-	"os"
 
-	"github.com/bitrise-io/go-steputils/tools"
 	"github.com/bitrise-io/go-steputils/v2/stepconf"
 	v1log "github.com/bitrise-io/go-utils/log"
 	"github.com/bitrise-io/go-utils/retry"
@@ -24,11 +23,6 @@ import (
 	"github.com/bitrise-io/go-xcode/v2/codesign"
 	"github.com/bitrise-io/go-xcode/xcodebuild"
 )
-
-func failf(format string, args ...interface{}) {
-	v1log.Errorf(format, args...)
-	os.Exit(1)
-}
 
 func downloadCertificates(certDownloader autocodesign.CertificateProvider, logger log.Logger) ([]certificateutil.CertificateInfoModel, error) {
 	certificates, err := certDownloader.GetCertificates()
@@ -50,13 +44,7 @@ func downloadCertificates(certDownloader autocodesign.CertificateProvider, logge
 	return certificates, nil
 }
 
-func main() {
-	// Parse and validate inputs
-	var cfg Config
-	parser := stepconf.NewInputParser(env.NewRepository())
-	if err := parser.Parse(&cfg); err != nil {
-		failf("Config: %s", err)
-	}
+func Run(cfg *Config) (map[string]string, error) {
 	stepconf.Print(cfg)
 
 	logger := log.NewLogger()
@@ -67,7 +55,7 @@ func main() {
 
 	xcodebuildVersion, err := utility.GetXcodeVersion()
 	if err != nil {
-		failf("Failed to determine Xcode version: %s", err)
+		return nil, fmt.Errorf("failed to determine Xcode version: %s", err)
 	}
 	logger.Printf("%s (%s)", xcodebuildVersion.Version, xcodebuildVersion.BuildVersion)
 
@@ -90,17 +78,17 @@ func main() {
 		ConfigurationName:      cfg.Configuration,
 	})
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	appLayout, err := project.GetAppLayout(cfg.SignUITestTargets)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	authType, err := parseAuthType(cfg.BitriseConnection)
 	if err != nil {
-		failf("Invalid input: unexpected value for Bitrise Apple Developer Connection (%s)", cfg.BitriseConnection)
+		return nil, fmt.Errorf("invalid input: unexpected value for Bitrise Apple Developer Connection (%s)", cfg.BitriseConnection)
 	}
 
 	codesignInputs := codesign.Input{
@@ -114,7 +102,7 @@ func main() {
 
 	codesignConfig, err := codesign.ParseConfig(codesignInputs, cmdFactory)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	var connection *devportalservice.AppleDeveloperConnection
@@ -122,7 +110,7 @@ func main() {
 		f := devportalclient.NewFactory(logger)
 		connection, err = f.CreateBitriseConnection(cfg.BuildURL, cfg.BuildAPIToken)
 		if err != nil {
-			failf(err.Error())
+			return nil, err
 		}
 	} else {
 		logger.Warnf(`Connected Apple Developer Portal Account not found: BITRISE_BUILD_URL and BITRISE_BUILD_API_TOKEN envs are not set. 
@@ -137,12 +125,12 @@ func main() {
 	}
 	appleAuthCredentials, err := codesign.SelectConnectionCredentials(authType, connection, connectionInputs, logger)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	keychain, err := keychain.New(cfg.KeychainPath, cfg.KeychainPassword, cmdFactory)
 	if err != nil {
-		failf(fmt.Sprintf("failed to initialize keychain: %s", err))
+		return nil, fmt.Errorf("failed to initialize keychain: %s", err)
 	}
 
 	devPortalClientFactory := devportalclient.NewFactory(logger)
@@ -152,19 +140,19 @@ func main() {
 
 	devPortalClient, err := devPortalClientFactory.Create(appleAuthCredentials, cfg.TeamID)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	fmt.Println()
 	logger.TDebugf("Downloading certificates")
 	certs, err := downloadCertificates(certDownloader, logger)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	typeToLocalCerts, err := autocodesign.GetValidLocalCertificates(certs)
 	if err != nil {
-		failf(err.Error())
+		return nil, err
 	}
 
 	// Create codesign manager
@@ -184,11 +172,11 @@ func main() {
 		VerboseLog:              cfg.VerboseLog,
 	})
 	if err != nil {
-		failf(fmt.Sprintf("Automatic code signing failed: %s", err))
+		return nil, fmt.Errorf("automatic code signing failed: %s", err)
 	}
 
 	if err := project.ForceCodesignAssets(distribution, codesignAssetsByDistributionType); err != nil {
-		failf(fmt.Sprintf("Failed to force codesign settings: %s", err))
+		return nil, fmt.Errorf("failed to force codesign settings: %s", err)
 	}
 
 	// Export output
@@ -197,50 +185,45 @@ func main() {
 
 	teamID := codesignAssetsByDistributionType[distribution].Certificate.TeamID
 	outputs := map[string]string{
-		"BITRISE_EXPORT_METHOD":  cfg.Distribution,
-		"BITRISE_DEVELOPER_TEAM": teamID,
+		"EXPORT_METHOD":  cfg.Distribution,
+		"DEVELOPER_TEAM": teamID,
 	}
 
 	settings, ok := codesignAssetsByDistributionType[autocodesign.Development]
 	if ok {
-		outputs["BITRISE_DEVELOPMENT_CODESIGN_IDENTITY"] = settings.Certificate.CommonName
+		outputs["DEVELOPMENT_CODESIGN_IDENTITY"] = settings.Certificate.CommonName
 
 		bundleID, err := project.MainTargetBundleID()
 		if err != nil {
-			failf("Failed to read bundle ID for the main target: %s", err)
+			return nil, fmt.Errorf("failed to read bundle ID for the main target: %s", err)
 		}
 		profile, ok := settings.ArchivableTargetProfilesByBundleID[bundleID]
 		if !ok {
-			failf("No provisioning profile ensured for the main target")
+			return nil, fmt.Errorf("no provisioning profile ensured for the main target")
 		}
 
-		outputs["BITRISE_DEVELOPMENT_PROFILE"] = profile.Attributes().UUID
+		outputs["DEVELOPMENT_PROFILE"] = profile.Attributes().UUID
 	}
 
 	if distribution != autocodesign.Development {
 		settings, ok := codesignAssetsByDistributionType[distribution]
 		if !ok {
-			failf("No codesign settings ensured for the selected distribution type: %s", distribution)
+			return nil, fmt.Errorf("no codesign settings ensured for the selected distribution type: %s", distribution)
 		}
 
-		outputs["BITRISE_PRODUCTION_CODESIGN_IDENTITY"] = settings.Certificate.CommonName
+		outputs["PRODUCTION_CODESIGN_IDENTITY"] = settings.Certificate.CommonName
 
 		bundleID, err := project.MainTargetBundleID()
 		if err != nil {
-			failf(err.Error())
+			return nil, err
 		}
 		profile, ok := settings.ArchivableTargetProfilesByBundleID[bundleID]
 		if !ok {
-			failf("No provisioning profile ensured for the main target")
+			return nil, errors.New("no provisioning profile ensured for the main target")
 		}
 
-		outputs["BITRISE_PRODUCTION_PROFILE"] = profile.Attributes().UUID
+		outputs["PRODUCTION_PROFILE"] = profile.Attributes().UUID
 	}
 
-	for k, v := range outputs {
-		logger.Donef("%s=%s", k, v)
-		if err := tools.ExportEnvironmentWithEnvman(k, v); err != nil {
-			failf("Failed to export %s=%s: %s", k, v, err)
-		}
-	}
+	return outputs, nil
 }
